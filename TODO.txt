@@ -1,0 +1,12 @@
+Prepare input for model:
+    - tokenize and duplicate labels for subtokens
+    - pad input until max_length
+
+Models to train:
+    - BERT base-uncased for baseline
+    - Bert base-cased
+    - RoBERTa??
+    - BERTNER?
+
+Refactor:
+    - Rename train params to correspond to dataset

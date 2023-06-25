@@ -2,7 +2,7 @@ from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForTokenCl
 from tqdm import tqdm
 
 import re
-from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
+from sklearn.metrics import confusion_matrix, f1_score, balanced_accuracy_score, classification_report
 import numpy as np
 import os
 import argparse
@@ -21,11 +21,10 @@ import torch.nn as nn
 
 from unidecode import unidecode
 
-from sklearn.model_selection import train_test_split
 from torch.utils.data import Dataset, DataLoader
 
 import json
-from sklearn.utils.class_weight import compute_class_weight
+from sklearn.utils.class_weight import compute_class_weight, compute_sample_weight
 
 
 from datasets import load_dataset
@@ -110,6 +109,7 @@ class MyModel():
             if label != -100:
                 proper_labels.append(int(label))
     weights = compute_class_weight(class_weight="balanced", classes=np.arange(0, self.NUM_CLASSES), y=proper_labels)
+    self.class_weights = {idx:weight for idx, weight in enumerate(weights)}
 
     weights_base = np.zeros(3)
     for sequence in y_train:
@@ -171,21 +171,24 @@ class MyModel():
         print('train loss: %10.8f, accuracy: %10.8f, f1: %10.8f\n'%(train_loss, train_accuracy, train_f1))
         print('val loss: %10.8f, accuracy: %10.8f, f1:%10.8f\n'%(val_loss, val_accuracy, val_f1))
 
-        if best_acc < val_accuracy:
-          best_acc = val_accuracy
+        if best_acc < val_f1:
+          best_acc = val_f1
           torch.save(self.model.state_dict(), os.path.join(self.opt.model_output_path, f"best.pt"))
 
-          cf_matrix = confusion_matrix(val_labels, val_predictions, labels=np.unique(np.array(val_labels)))
-          
-          sns.set(font_scale=0.7)
-          sns.set(rc={'figure.figsize':(25,25)})
-          ax = sns.heatmap(cf_matrix, annot=True, cmap='Blues', fmt='d', norm=LogNorm())
+        sample_weights = compute_sample_weight(self.class_weights, val_labels)
+        # print(sample_weights)
+        # print(classification_report(val_labels, val_predictions, labels=np.unique(np.array(val_labels))))
+        # print(classification_report(val_labels, val_predictions, labels=np.unique(np.array(val_labels)), sample_weight=sample_weights))
+        cf_matrix = confusion_matrix(val_labels, val_predictions, labels=np.unique(np.array(val_labels)))
+        sns.set(font_scale=0.7)
+        sns.set(rc={'figure.figsize':(25,25)})
+        ax = sns.heatmap(cf_matrix, annot=True, cmap='Blues', fmt='d', norm=LogNorm())
 
-          ax.set_title('Confusion Matrix on logarithmic scale\n\n')
-          ax.set_xlabel('\nPredicted Values')
-          ax.set_ylabel('Actual Values ')
-          plt.savefig(os.path.join(self.opt.project_name, 'confusion_matrix_log.png'), dpi=150)
-          plt.close()
+        ax.set_title('Confusion Matrix on logarithmic scale\n\n')
+        ax.set_xlabel('\nPredicted Values')
+        ax.set_ylabel('Actual Values ')
+        plt.savefig(os.path.join(self.opt.project_name, f'confusion_matrix_log_{epoch}.png'), dpi=150)
+        plt.close()
 
         torch.save(self.model.state_dict(), os.path.join(self.opt.model_output_path, f"last.pt"))
 
@@ -248,10 +251,11 @@ class MyModel():
         labels += filtered_labels.squeeze().tolist()
         predictions += filtered_predictions.tolist()
 
-        sample_weights = [self.weights[label] for label in filtered_labels.cpu().numpy()]
-        batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), sample_weight=sample_weights)
+        #sample_weights = [self.weights[label] for label in filtered_labels.cpu().numpy()]
+        sample_weights = compute_sample_weight(self.class_weights, filtered_labels.squeeze().tolist())
+        batch_acc = balanced_accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), sample_weight=sample_weights)
         epoch_acc += batch_acc
-        batch_f1 = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='weighted')
+        batch_f1 = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='macro')#, sample_weight=sample_weights)
         epoch_f1 += batch_f1
 
         loss_scalar = loss.item()
@@ -305,10 +309,10 @@ class MyModel():
             predictions += filtered_predictions.tolist()
 
             sample_weights = [self.weights[label] for label in filtered_labels.cpu().numpy()]
-            batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), sample_weight=sample_weights)
+            batch_acc = balanced_accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), sample_weight=sample_weights)
             epoch_acc += batch_acc
 
-            batch_f1 = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='weighted')
+            batch_f1 = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='macro')
             epoch_f1 += batch_f1
 
             loss_scalar = loss.item()
