@@ -1,10 +1,11 @@
 from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForTokenClassification
 from tqdm import tqdm
-from nervaluate import Evaluator
 
 import re
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score
 import numpy as np
+import os
+import argparse
 
 import random
 
@@ -30,16 +31,26 @@ from sklearn.utils.class_weight import compute_class_weight
 from datasets import load_dataset
 dataset = load_dataset("species_800")
 
-print(datset)
-print(dataset["train"])
-print(len(dataset["train"]))
 
-# print(f"Train dataset contains {len(train_dataset)} instances.")  
-# print(f"Validation dataset contains {len(valid_dataset)} instances.")  
-# print(f"Test dataset contains {len(test_dataset)} instances.")
+train_dataset = dataset["train"]
+valid_dataset = dataset["validation"]
+test_dataset = dataset["test"]
+
+# counter = 0
+# for item in dataset["train"]:
+#     counter += len(item['tokens'])
+# counter /= len(dataset["train"]) # 26 wp
+# import pdb; pdb.set_trace();
+
+# print(dataset)
+# print(dataset["train"])
+# print(len(dataset["train"]))
+print(f"Train dataset contains {len(train_dataset)} instances.")  
+print(f"Validation dataset contains {len(valid_dataset)} instances.")  
+print(f"Test dataset contains {len(test_dataset)} instances.")
 
 class MyModel():
-  def __init__(self):
+  def __init__(self, opt):
     # do here any initializations you require
     # addings seeds
     seed = 8 
@@ -50,22 +61,27 @@ class MyModel():
     np.random.RandomState(seed)
 
     # Defaults
-    self.NUM_CLASSES = 31
+    self.NUM_CLASSES = 3
     self.MAX_LENGTH = 128
     self.EPOCHS = 15
     self.BATCH_SIZE = 64
     self.NUM_LAYERS_FROZEN = 6
     self.LEARNING_RATE = 0.0001
-    self.tags = ["O", "PERSON", "ORG", "GPE", "LOC", "NAT_REL_POL", "EVENT", "LANGUAGE", "WORK_OF_ART", "DATETIME", "PERIOD", "MONEY", "QUANTITY", "NUMERIC", "ORDINAL", "FACILITY"]
+    # self.tags = ["O", "PERSON", "ORG", "GPE", "LOC", "NAT_REL_POL", "EVENT", "LANGUAGE", "WORK_OF_ART", "DATETIME", "PERIOD", "MONEY", "QUANTITY", "NUMERIC", "ORDINAL", "FACILITY"]
 
-    self.classes = [ "O", "B-PERSON", "I-PERSON", "B-ORG", "I-ORG", "B-GPE", "I-GPE", "B-LOC", "I-LOC", "B-NAT_REL_POL", "I-NAT_REL_POL", "B-EVENT", "I-EVENT", "B-LANGUAGE", 
-                     "I-LANGUAGE", "B-WORK_OF_ART", "I-WORK_OF_ART", "B-DATETIME", "I-DATETIME", "B-PERIOD", "I-PERIOD", "B-MONEY", "I-MONEY", "B-QUANTITY", "I-QUANTITY", 
-                     "B-NUMERIC", "I-NUMERIC", "B-ORDINAL", "I-ORDINAL", "B-FACILITY", "I-FACILITY",
-                    ]
+    self.classes = [ "0", "1", "2"]
+    self.opt = opt
+    self.opt.model_output_path = os.path.join(self.opt.project_name, 'weights')
+    if not os.path.exists(self.opt.project_name):
+      os.makedirs(self.opt.project_name)
+      os.makedirs(self.opt.model_output_path)
 
     # train_data, train_labels = self.read_dataset(train_dataset, tokenizer=tokenizer)
-    self.model = AutoModelForTokenClassification.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1", num_labels=self.NUM_CLASSES)
-    self.tokenizer = AutoTokenizer.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1")
+    # self.model = AutoModelForTokenClassification.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1", num_labels=self.NUM_CLASSES)
+    # self.tokenizer = AutoTokenizer.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1")
+
+    self.model = AutoModelForTokenClassification.from_pretrained("bert-base-uncased", num_labels=self.NUM_CLASSES)
+    self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     
     # for param in self.model.bert.parameters():
     #   param.requires_grad = False
@@ -76,12 +92,12 @@ class MyModel():
         for param in layer.parameters():
             param.requires_grad = False
 
-  def load(self, model_resource_folder):
-    self.model.load_state_dict(torch.load(model_resource_folder))
+  def load(self):
+    self.model.load_state_dict(torch.load(self.opt.weights))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     self.model.to(device)
 
-  def train(self, train_data_file, validation_data_file, model_resource_folder):
+  def train(self, train_data_file, validation_data_file):
     # Prepairing the data
     print("Preparing data")
     X_train, y_train = self.read_dataset(train_data_file, tokenizer=self.tokenizer)
@@ -90,11 +106,24 @@ class MyModel():
     # Computing weights for our evaluation
     proper_labels = []
     for sequence in y_train:
-        mini_label = []
         for label in sequence:
             if label != -100:
                 proper_labels.append(int(label))
     weights = compute_class_weight(class_weight="balanced", classes=np.arange(0, self.NUM_CLASSES), y=proper_labels)
+
+    weights_base = np.zeros(3)
+    for sequence in y_train:
+        for label in sequence:
+            if label != -100:
+                weights_base[label] += 1
+    # max_weight = np.max(weights_base)
+    max_weight = np.sum(weights_base)
+    for index, weight in enumerate(weights_base):
+        weights_base[index] = max_weight / weights_base[index] 
+    # import pdb; pdb.set_trace();
+
+    self.weights = weights
+    self.weights_base = weights_base
 
     # Creating the datasets
     train_dataset = MyModel.MyDataset(X_train, y_train)
@@ -124,38 +153,45 @@ class MyModel():
     print("Training:")
     train_losses = []
     train_accuracies = []
+    train_f1s = []
     val_losses = []
     val_accuracies = []
+    val_f1s = []
+    best_acc = -1
     for epoch in range(1, self.EPOCHS + 1):
-        train_loss, train_accuracy, pepega_labels = self.train_epoch(self.model, train_dataloader, loss_criterion, optimizer, device)
-        val_loss, val_accuracy, val_labels, val_predictions = self.eval_epoch(self.model, validation_dataloader, loss_criterion, device)
+        train_loss, train_accuracy, train_f1, _ = self.train_epoch(self.model, train_dataloader, loss_criterion, optimizer, device)
+        val_loss, val_accuracy, val_f1, val_labels, val_predictions = self.eval_epoch(self.model, validation_dataloader, loss_criterion, device)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         train_accuracies.append(train_accuracy)
         val_accuracies.append(val_accuracy)
+        train_f1s.append(train_f1)
+        val_f1s.append(val_f1)
         print('\nEpoch %d'%(epoch))
-        print('train loss: %10.8f, accuracy: %10.8f'%(train_loss, train_accuracy))
-        print('val loss: %10.8f, accuracy: %10.8f\n'%(val_loss, val_accuracy))
+        print('train loss: %10.8f, accuracy: %10.8f, f1: %10.8f\n'%(train_loss, train_accuracy, train_f1))
+        print('val loss: %10.8f, accuracy: %10.8f, f1:%10.8f\n'%(val_loss, val_accuracy, val_f1))
 
-        torch.save(self.model.state_dict(), model_resource_folder)
-    
+        if best_acc < val_accuracy:
+          best_acc = val_accuracy
+          torch.save(self.model.state_dict(), os.path.join(self.opt.model_output_path, f"best.pt"))
 
+          cf_matrix = confusion_matrix(val_labels, val_predictions, labels=np.unique(np.array(val_labels)))
+          
+          sns.set(font_scale=0.7)
+          sns.set(rc={'figure.figsize':(25,25)})
+          ax = sns.heatmap(cf_matrix, annot=True, cmap='Blues', fmt='d', norm=LogNorm())
 
-    self.plot_gen(train_losses, val_losses, "loss")
-    self.plot_gen(train_accuracies, val_accuracies, "accuracy")
+          ax.set_title('Confusion Matrix on logarithmic scale\n\n')
+          ax.set_xlabel('\nPredicted Values')
+          ax.set_ylabel('Actual Values ')
+          plt.savefig(os.path.join(self.opt.project_name, 'confusion_matrix_log.png'), dpi=150)
+          plt.close()
 
-    cf_matrix = confusion_matrix(val_labels, val_predictions, labels=np.unique(np.array(val_labels)))
-    
-    sns.set(font_scale=0.7)
-    sns.set(rc={'figure.figsize':(25,25)})
-    ax = sns.heatmap(cf_matrix, annot=True, cmap='Blues', fmt='d', norm=LogNorm())
+        torch.save(self.model.state_dict(), os.path.join(self.opt.model_output_path, f"last.pt"))
 
-    ax.set_title('Confusion Matrix on logarithmic scale\n\n')
-    ax.set_xlabel('\nPredicted Values')
-    ax.set_ylabel('Actual Values ')
-    plt.savefig('confusion_matrix_log.png', dpi=300)
-    plt.show()
-    plt.close()
+        self.plot_gen(train_losses, val_losses, "loss") 
+        self.plot_gen(train_accuracies, val_accuracies, "accuracy")
+        self.plot_gen(train_f1s, val_f1s, "F1")
 
 
   def predict(self, test_data_file):
@@ -179,15 +215,16 @@ class MyModel():
           reshaped_labels.append(all_labels[index: index + value])
           index += value
 
-      evaluator = Evaluator(reshaped_labels, reshaped_predictions, tags=self.tags, loader="list")
-      results, results_by_tag = evaluator.evaluate()
-      return results['strict']['f1']
+      # evaluator = Evaluator(reshaped_labels, reshaped_predictions, tags=self.tags, loader="list")
+      # results, results_by_tag = evaluator.evaluate()
+      # return results['strict']['f1']
       
 
   def train_epoch(self, model, train_dataloader, loss_crt, optimizer, device):
     model.train()
     epoch_loss = 0.0
     epoch_acc = 0.0
+    epoch_f1 = 0.0
     num_batches = len(train_dataloader)
     predictions = []
     labels = []
@@ -211,8 +248,11 @@ class MyModel():
         labels += filtered_labels.squeeze().tolist()
         predictions += filtered_predictions.tolist()
 
-        batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy())
+        sample_weights = [self.weights[label] for label in filtered_labels.cpu().numpy()]
+        batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), sample_weight=sample_weights)
         epoch_acc += batch_acc
+        batch_f1 = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='weighted')
+        epoch_f1 += batch_f1
 
         loss_scalar = loss.item()
 
@@ -230,15 +270,17 @@ class MyModel():
 
         epoch_loss += loss_scalar
 
-    epoch_loss = epoch_loss/num_batches
-    epoch_acc = epoch_acc/num_batches
+    epoch_loss = epoch_loss / num_batches
+    epoch_acc = epoch_acc / num_batches
+    epoch_f1 = epoch_f1 / num_batches
 
-    return epoch_loss, epoch_acc, labels
+    return epoch_loss, epoch_acc, epoch_f1, labels
   
   def eval_epoch(self, model, val_dataloader, loss_crt, device):
     model.eval()
     epoch_loss = 0.0
     epoch_acc = 0.0
+    epoch_f1 = 0.0
     num_batches = len(val_dataloader)
     predictions = []
     labels = []
@@ -262,17 +304,22 @@ class MyModel():
             labels += filtered_labels.squeeze().tolist()
             predictions += filtered_predictions.tolist()
 
-            batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy())
+            sample_weights = [self.weights[label] for label in filtered_labels.cpu().numpy()]
+            batch_acc = accuracy_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), sample_weight=sample_weights)
             epoch_acc += batch_acc
+
+            batch_f1 = f1_score(filtered_labels.cpu().numpy(), filtered_predictions.cpu().numpy(), average='weighted')
+            epoch_f1 += batch_f1
 
             loss_scalar = loss.item()
 
             epoch_loss += loss_scalar
 
-    epoch_loss = epoch_loss/num_batches
-    epoch_acc = epoch_acc/num_batches
+    epoch_loss = epoch_loss / num_batches
+    epoch_acc = epoch_acc / num_batches
+    epoch_f1 = epoch_f1 / num_batches
 
-    return epoch_loss, epoch_acc, labels, predictions
+    return epoch_loss, epoch_acc, epoch_f1, labels, predictions
 
   def test_epoch(self, model, test_dataloader, device):
     model.eval()
@@ -326,7 +373,7 @@ class MyModel():
     reshaped_length = 110
     for item in dataset:
         prelucrate_item = []
-        item_lengths.append(len(item['ner_ids']))
+        item_lengths.append(len(item['ner_tags']))
 
         for token in item['tokens']:
             prelucrate_item.append(re.sub(r"\W+", 'n', token))
@@ -334,7 +381,7 @@ class MyModel():
         for i in range(0, len(prelucrate_item), reshaped_length):
             reshaped_dataset.append(prelucrate_item[i: min(i + reshaped_length, len(prelucrate_item))])
             # print(item.keys())
-            reshaped_labels.append( item['ner_ids'][i: min(i + reshaped_length, len(item['ner_ids']))])
+            reshaped_labels.append( item['ner_tags'][i: min(i + reshaped_length, len(item['ner_tags']))])
             
     for index in range(len(reshaped_dataset)):
         items, sequence_labels =  reshaped_dataset[index], reshaped_labels[index]
@@ -377,8 +424,8 @@ class MyModel():
     plt.xlabel(x_label)
     plt.ylabel(metric)
     plt.legend()
-    plt.savefig(metric + '.png')
-    plt.show()
+    plt.savefig(os.path.join(self.opt.project_name, metric + '.png'))
+    #plt.show()
     plt.close()
 
   class MyDataset(Dataset):
@@ -404,17 +451,36 @@ class MyModel():
       def __len__(self):
           return len(self.data)
 
-model = MyModel()
-model.train(train_dataset, valid_dataset, "output")
+def parse_opt(known=False): 
+  parser = argparse.ArgumentParser()
+  parser.add_argument('--weights', type=str, default='yolov5s.pt', help='initial weights path')
+  parser.add_argument('--epochs', type=int, default=100, help='total training epochs')
+  parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs, -1 for autobatch')
+  parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
+  parser.add_argument('--noval', action='store_true', help='only validate final epoch')
+  # parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
+  parser.add_argument('--optimizer', type=str, choices=['SGD', 'Adam', 'AdamW'], default='SGD', help='optimizer')
+  parser.add_argument('--project-name', default='runs/train', help='save to project/name')
+  parser.add_argument('--freeze', nargs='+', type=int, default=[0], help='Freeze layers: backbone=10, first3=0 1 2')
+  parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
+  parser.add_argument('--seed', type=int, default=0, help='Global training seed')
 
-from time import perf_counter
-model = MyModel()
-model.load("output")
 
-# inference
-start_time = perf_counter()
-f1_strict_score = model.predict(test_dataset)
-stop_time = perf_counter()
+  return parser.parse_known_args()[0] if known else parser.parse_args()
 
-print(f"Predicted in {stop_time-start_time:.2f}.")
-print(f"F1-strict score = {f1_strict_score:.5f}") # this is the score we want :
+if __name__ == "__main__":
+  opt = parse_opt()
+  model = MyModel(opt)
+  model.train(train_dataset, valid_dataset)
+
+  from time import perf_counter
+  model = MyModel()
+  model.load("output")
+
+  # inference
+  start_time = perf_counter()
+  f1_strict_score = model.predict(test_dataset)
+  stop_time = perf_counter()
+
+  print(f"Predicted in {stop_time-start_time:.2f}.")
+  print(f"F1-strict score = {f1_strict_score:.5f}") # this is the score we want :
