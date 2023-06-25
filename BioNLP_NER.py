@@ -67,7 +67,8 @@ class MyModel():
 
     self.NUM_CLASSES = 3
     self.MAX_LENGTH = 128
-    self.LEARNING_RATE = 0.0001
+    self.LEARNING_RATE = 1e-4
+    # self.LEARNING_RATE = 5e-5
 
     self.classes = [ "0", "1", "2"]
     self.opt = opt
@@ -76,12 +77,41 @@ class MyModel():
     # self.model = AutoModelForTokenClassification.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1", num_labels=self.NUM_CLASSES)
     # self.tokenizer = AutoTokenizer.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1")
 
-    self.model = AutoModelForTokenClassification.from_pretrained("bert-base-uncased", num_labels=self.NUM_CLASSES)
-    self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    # self.model = AutoModelForTokenClassification.from_pretrained("bert-base-uncased", num_labels=self.NUM_CLASSES)
+    # self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+
+    self.model = AutoModelForTokenClassification.from_pretrained("bert-base-cased", num_labels=self.NUM_CLASSES)
+    self.tokenizer = AutoTokenizer.from_pretrained("bert-base-cased")
+
+    # self.model = AutoModelForTokenClassification.from_pretrained("roberta-base", num_labels=self.NUM_CLASSES)
+    # self.tokenizer = AutoTokenizer.from_pretrained("roberta-base", add_prefix_space=True)
+
+    # self.model = AutoModelForTokenClassification.from_pretrained("dslim/bert-base-NER", num_labels=self.NUM_CLASSES, ignore_mismatched_sizes=True)
+    # self.tokenizer = AutoTokenizer.from_pretrained("dslim/bert-base-NER")
     
+    # self.model = AutoModelForTokenClassification.from_pretrained("microsoft/deberta-base", num_labels=self.NUM_CLASSES, ignore_mismatched_sizes=True)
+    # self.tokenizer = AutoTokenizer.from_pretrained("microsoft/deberta-base", add_prefix_space=True)
+
+    # self.model = AutoModelForTokenClassification.from_pretrained("dmis-lab/biobert-base-cased-v1.2", num_labels=self.NUM_CLASSES, ignore_mismatched_sizes=True)
+    # self.tokenizer = AutoTokenizer.from_pretrained("dmis-lab/biobert-base-cased-v1.2")
+
+    # self.model = AutoModelForTokenClassification.from_pretrained("nlpie/distil-biobert", num_labels=self.NUM_CLASSES, ignore_mismatched_sizes=True)
+    # self.tokenizer = AutoTokenizer.from_pretrained("nlpie/distil-biobert")
+
+ 
     # for param in self.model.bert.parameters():
     #   param.requires_grad = False
 
+    # for param in self.model.bert.embeddings.parameters():
+    #   param.requires_grad = False
+    # for layer in self.model.bert.encoder.layer[:self.NUM_LAYERS_FROZEN]:
+
+    # for param in self.model.roberta.embeddings.parameters():
+    #   param.requires_grad = False
+    # for layer in self.model.roberta.encoder.layer[:self.NUM_LAYERS_FROZEN]:
+    # for param in self.model.deberta.embeddings.parameters():
+    #   param.requires_grad = False
+    # for layer in self.model.deberta.encoder.layer[:self.NUM_LAYERS_FROZEN]:
     for param in self.model.bert.embeddings.parameters():
       param.requires_grad = False
     for layer in self.model.bert.encoder.layer[:self.NUM_LAYERS_FROZEN]:
@@ -471,9 +501,9 @@ if __name__ == "__main__":
   # parser stuffs
   opt = parse_opt()
   opt.model_output_path = os.path.join(opt.project_name, 'weights')
-  if opt.mode == 'train' and (not os.path.exists(opt.project_name)):
-    os.makedirs(opt.project_name)
-    os.makedirs(opt.model_output_path)
+  if opt.mode == 'train':
+    os.makedirs(opt.project_name, exist_ok=True)
+    os.makedirs(opt.model_output_path, exist_ok=True)
 
   if opt.mode == "train":
     model = MyModel(opt)
