@@ -10,3 +10,5 @@ Models to train:
 
 Refactor:
     - Rename train params to correspond to dataset
+    - Refactor predict (with test data)
+    - Add some arugments from the command line

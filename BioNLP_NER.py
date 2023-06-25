@@ -12,6 +12,7 @@ import random
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, Normalize
 import seaborn as sns
+from time import perf_counter
 
 import torch
 import torch.nn as nn
@@ -52,7 +53,7 @@ class MyModel():
   def __init__(self, opt):
     # do here any initializations you require
     # addings seeds
-    seed = 8 
+    seed = opt.seed 
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(False)
     random.seed(seed)
@@ -60,20 +61,16 @@ class MyModel():
     np.random.RandomState(seed)
 
     # Defaults
+    self.EPOCHS = opt.epochs
+    self.BATCH_SIZE = opt.batch_size
+    self.NUM_LAYERS_FROZEN = opt.freeze
+
     self.NUM_CLASSES = 3
     self.MAX_LENGTH = 128
-    self.EPOCHS = 15
-    self.BATCH_SIZE = 64
-    self.NUM_LAYERS_FROZEN = 6
     self.LEARNING_RATE = 0.0001
-    # self.tags = ["O", "PERSON", "ORG", "GPE", "LOC", "NAT_REL_POL", "EVENT", "LANGUAGE", "WORK_OF_ART", "DATETIME", "PERIOD", "MONEY", "QUANTITY", "NUMERIC", "ORDINAL", "FACILITY"]
 
     self.classes = [ "0", "1", "2"]
     self.opt = opt
-    self.opt.model_output_path = os.path.join(self.opt.project_name, 'weights')
-    if not os.path.exists(self.opt.project_name):
-      os.makedirs(self.opt.project_name)
-      os.makedirs(self.opt.model_output_path)
 
     # train_data, train_labels = self.read_dataset(train_dataset, tokenizer=tokenizer)
     # self.model = AutoModelForTokenClassification.from_pretrained("dumitrescustefan/bert-base-romanian-cased-v1", num_labels=self.NUM_CLASSES)
@@ -96,11 +93,11 @@ class MyModel():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     self.model.to(device)
 
-  def train(self, train_data_file, validation_data_file):
+  def train(self, train_data, validation_data):
     # Prepairing the data
     print("Preparing data")
-    X_train, y_train = self.read_dataset(train_data_file, tokenizer=self.tokenizer)
-    X_val, y_val = self.read_dataset(validation_data_file, tokenizer=self.tokenizer)
+    X_train, y_train = self.read_dataset(train_data, tokenizer=self.tokenizer)
+    X_val, y_val = self.read_dataset(validation_data, tokenizer=self.tokenizer)
 
     # Computing weights for our evaluation
     proper_labels = []
@@ -160,7 +157,7 @@ class MyModel():
     best_acc = -1
     for epoch in range(1, self.EPOCHS + 1):
         train_loss, train_accuracy, train_f1, _ = self.train_epoch(self.model, train_dataloader, loss_criterion, optimizer, device)
-        val_loss, val_accuracy, val_f1, val_labels, val_predictions = self.eval_epoch(self.model, validation_dataloader, loss_criterion, device)
+        val_loss, val_accuracy, val_f1, val_labels, val_predictions = self.eval_epoch(self.model, validation_dataloader, device)
         train_losses.append(train_loss)
         val_losses.append(val_loss)
         train_accuracies.append(train_accuracy)
@@ -175,7 +172,7 @@ class MyModel():
           best_acc = val_f1
           torch.save(self.model.state_dict(), os.path.join(self.opt.model_output_path, f"best.pt"))
 
-        sample_weights = compute_sample_weight(self.class_weights, val_labels)
+        # sample_weights = compute_sample_weight(self.class_weights, val_labels)
         # print(sample_weights)
         # print(classification_report(val_labels, val_predictions, labels=np.unique(np.array(val_labels))))
         # print(classification_report(val_labels, val_predictions, labels=np.unique(np.array(val_labels)), sample_weight=sample_weights))
@@ -206,22 +203,24 @@ class MyModel():
         dataset=test_dataset,
         batch_size=self.BATCH_SIZE
       )
-      all_predictions, all_labels = self.test_epoch(self.model, test_dataloader, device)
-      for idx in range(len(all_predictions)):
-          all_predictions[idx] = self.classes[all_predictions[idx]]
-          all_labels[idx] = self.classes[all_labels[idx]]
-      reshaped_predictions = []
-      reshaped_labels = []
-      index = 0
-      for value in item_lengths:
-          reshaped_predictions.append(all_predictions[index: index + value])
-          reshaped_labels.append(all_labels[index: index + value])
-          index += value
+      # all_predictions, all_labels = self.test_epoch(self.model, test_dataloader, device)
+      test_loss, test_accuracy, test_f1, test_labels, test_predictions = self.eval_epoch(self.model, test_dataloader, device)
 
-      # evaluator = Evaluator(reshaped_labels, reshaped_predictions, tags=self.tags, loader="list")
-      # results, results_by_tag = evaluator.evaluate()
-      # return results['strict']['f1']
-      
+
+      print('Test loss: %10.8f, accuracy: %10.8f, f1:%10.8f\n'%(test_loss, test_accuracy, test_f1))
+
+      cf_matrix = confusion_matrix(test_labels, test_predictions, labels=np.unique(np.array(test_labels)))
+      sns.set(font_scale=0.7)
+      sns.set(rc={'figure.figsize':(25,25)})
+      ax = sns.heatmap(cf_matrix, annot=True, cmap='Blues', fmt='d', norm=LogNorm())
+
+      ax.set_title('Confusion Matrix on logarithmic scale\n\n')
+      ax.set_xlabel('\nPredicted Values')
+      ax.set_ylabel('Actual Values ')
+      plt.savefig(os.path.join(self.opt.project_name, f'test_confusion_matrix.png'), dpi=150)
+      plt.close()
+
+      return test_f1
 
   def train_epoch(self, model, train_dataloader, loss_crt, optimizer, device):
     model.train()
@@ -280,7 +279,7 @@ class MyModel():
 
     return epoch_loss, epoch_acc, epoch_f1, labels
   
-  def eval_epoch(self, model, val_dataloader, loss_crt, device):
+  def eval_epoch(self, model, val_dataloader, device):
     model.eval()
     epoch_loss = 0.0
     epoch_acc = 0.0
@@ -457,34 +456,42 @@ class MyModel():
 
 def parse_opt(known=False): 
   parser = argparse.ArgumentParser()
-  parser.add_argument('--weights', type=str, default='yolov5s.pt', help='initial weights path')
-  parser.add_argument('--epochs', type=int, default=100, help='total training epochs')
-  parser.add_argument('--batch-size', type=int, default=16, help='total batch size for all GPUs, -1 for autobatch')
-  parser.add_argument('--resume', nargs='?', const=True, default=False, help='resume most recent training')
-  parser.add_argument('--noval', action='store_true', help='only validate final epoch')
-  # parser.add_argument('--image-weights', action='store_true', help='use weighted image selection for training')
-  parser.add_argument('--optimizer', type=str, choices=['SGD', 'Adam', 'AdamW'], default='SGD', help='optimizer')
-  parser.add_argument('--project-name', default='runs/train', help='save to project/name')
-  parser.add_argument('--freeze', nargs='+', type=int, default=[0], help='Freeze layers: backbone=10, first3=0 1 2')
-  parser.add_argument('--save-period', type=int, default=-1, help='Save checkpoint every x epochs (disabled if < 1)')
-  parser.add_argument('--seed', type=int, default=0, help='Global training seed')
+  parser.add_argument('--project-name', default='runs/train/train_test', help='save to project/name')
+  parser.add_argument('--weights', type=str, default='best.pt', help='weights path to use on test')
+  parser.add_argument('--epochs', type=int, default=15, help='total training epochs')
+  parser.add_argument('--batch-size', type=int, default=64, help='total batch size')
+  parser.add_argument('--mode', type=str, choices=['train', 'test'], default='train', help='Whether to only test or run train as well')
+  parser.add_argument('--freeze', type=int, default=6, help='Number of frozen layers')
+  parser.add_argument('--seed', type=int, default=8, help='Global training seed')
 
 
   return parser.parse_known_args()[0] if known else parser.parse_args()
 
 if __name__ == "__main__":
+  # parser stuffs
   opt = parse_opt()
-  model = MyModel(opt)
-  model.train(train_dataset, valid_dataset)
+  opt.model_output_path = os.path.join(opt.project_name, 'weights')
+  if opt.mode == 'train' and (not os.path.exists(opt.project_name)):
+    os.makedirs(opt.project_name)
+    os.makedirs(opt.model_output_path)
 
-  from time import perf_counter
-  model = MyModel()
-  model.load("output")
+  if opt.mode == "train":
+    model = MyModel(opt)
+    model.train(train_dataset, valid_dataset)
 
-  # inference
-  start_time = perf_counter()
-  f1_strict_score = model.predict(test_dataset)
-  stop_time = perf_counter()
+    # inference
+    start_time = perf_counter()
+    f1_strict_score = model.predict(test_dataset)
+    stop_time = perf_counter()
+  else:
+    model = MyModel(opt)
+    model.load(opt.weights)
+
+    # inference
+    start_time = perf_counter()
+    f1_strict_score = model.predict(test_dataset)
+    stop_time = perf_counter()
+
 
   print(f"Predicted in {stop_time-start_time:.2f}.")
   print(f"F1-strict score = {f1_strict_score:.5f}") # this is the score we want :
