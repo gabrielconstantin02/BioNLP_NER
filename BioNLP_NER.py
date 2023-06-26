@@ -1,40 +1,47 @@
-from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForTokenClassification
-from tqdm import tqdm
-
 import re
-from sklearn.metrics import confusion_matrix, f1_score, balanced_accuracy_score, classification_report
-import numpy as np
 import os
 import argparse
-
 import random
+from tqdm import tqdm
+from unidecode import unidecode
+from time import perf_counter
+import json
+
+import torch
+import torch.nn as nn
+import numpy as np
+from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModel, pipeline, AutoModelForTokenClassification
+from sklearn.metrics import confusion_matrix, f1_score, balanced_accuracy_score, classification_report
+from sklearn.utils.class_weight import compute_class_weight, compute_sample_weight
+from torch.utils.data import Dataset, DataLoader
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, Normalize
 import seaborn as sns
-from time import perf_counter
 
-import torch
-import torch.nn as nn
-
-# import jax
-# jax.random.PRNGKey(seed)
-
-from unidecode import unidecode
-
-from torch.utils.data import Dataset, DataLoader
-
-import json
-from sklearn.utils.class_weight import compute_class_weight, compute_sample_weight
-
-
-from datasets import load_dataset
 dataset = load_dataset("species_800")
-
 
 train_dataset = dataset["train"]
 valid_dataset = dataset["validation"]
 test_dataset = dataset["test"]
+
+# def count_data(dataset):
+#   counter = {
+#      0: 0,
+#      1: 0,
+#      2: 0,
+#      "all": 0
+#   }
+#   for item in dataset:
+#     counter['all'] += len(item['tokens'])
+#     for cls in item['ner_tags']:
+#        counter[cls] += 1
+#   return counter
+
+# print(count_data(train_dataset))
+# print(count_data(valid_dataset))
+# print(count_data(test_dataset))
 
 # counter = 0
 # for item in dataset["train"]:
